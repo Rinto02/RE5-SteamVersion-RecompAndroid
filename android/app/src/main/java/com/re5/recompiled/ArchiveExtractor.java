@@ -196,17 +196,7 @@ public class ArchiveExtractor {
     }
 
     private void organizeExtractedFolder(File targetDir) {
-        File subGame = new File(targetDir, "game");
-        if (subGame.exists() && subGame.isDirectory()) {
-            File[] files = subGame.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    File dest = new File(targetDir, f.getName());
-                    f.renameTo(dest);
-                }
-            }
-            subGame.delete();
-        }
+        GameStorage.normalizeLayout(targetDir);
     }
 
     private void extractZip(Context context, Uri archiveUri, File targetDir, Callback callback) throws Exception {

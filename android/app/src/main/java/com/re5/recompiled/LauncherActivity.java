@@ -57,6 +57,7 @@ import java.util.Locale;
 public final class LauncherActivity extends Activity {
     private static final int REQUEST_ARCHIVE_PICK = 1001;
     private static final int REQUEST_STORAGE_PERMISSION = 1002;
+    private static final int REQUEST_FOLDER_PICK = 1004;
 
     private static final int BG = 0xFF0A0B0D;
     private static final int SURFACE = 0xFF15171B;
@@ -282,9 +283,79 @@ public final class LauncherActivity extends Activity {
         startActivityForResult(intent, REQUEST_ARCHIVE_PICK);
     }
 
+    private void openFolderPicker() {
+        startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_FOLDER_PICK);
+    }
+
+    /** Copia a pasta escolhida (já extraída) para a pasta do jogo e acerta a estrutura. */
+    private void importFolder(Uri tree) {
+        File target = GameStorage.gameDir(this);
+        DocumentFile root = DocumentFile.fromTreeUri(this, tree);
+        if (root == null || !root.isDirectory()) {
+            alert(L.t("Erro na extração"), L.t("Não foi possível abrir a pasta escolhida."));
+            return;
+        }
+        setBusy(true, L.t("Copiando a pasta do jogo…"));
+        new Thread(() -> {
+            long[] count = {0};
+            String err = null;
+            try {
+                copyDocTree(root, target, count);
+                GameStorage.normalizeLayout(target);
+            } catch (Exception e) {
+                err = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final String error = err;
+            main.post(() -> {
+                gameSize = -1;
+                setBusy(false, null);
+                if (error != null) {
+                    alert(L.t("Erro na extração"), error);
+                } else if (GameStorage.isInstalled(target)) {
+                    Toast.makeText(this, L.t("Jogo instalado."), Toast.LENGTH_LONG).show();
+                    refresh();
+                } else {
+                    alert(L.t("Pasta incompleta"), L.t("Não encontrei ") + GameStorage.DATA_DIR_NAME + "/ e "
+                            + GameStorage.EXE_NAME + L.t(" nessa pasta. Escolha a pasta que contém os dois."));
+                }
+            });
+        }).start();
+    }
+
+    private void copyDocTree(DocumentFile src, File dst, long[] count) throws java.io.IOException {
+        if (!dst.isDirectory() && !dst.mkdirs()) throw new java.io.IOException(L.t("não foi possível criar ") + dst);
+        byte[] buf = new byte[1 << 20];
+        for (DocumentFile f : src.listFiles()) {
+            String name = f.getName();
+            if (name == null) continue;
+            File out = new File(dst, name);
+            if (f.isDirectory()) {
+                copyDocTree(f, out, count);
+                continue;
+            }
+            // Retomável: o que já chegou com o mesmo tamanho não é copiado de novo.
+            if (out.isFile() && out.length() == f.length()) continue;
+            File tmp = new File(out.getPath() + ".part");
+            try (java.io.InputStream in = getContentResolver().openInputStream(f.getUri());
+                 java.io.OutputStream os = new java.io.FileOutputStream(tmp)) {
+                if (in == null) throw new java.io.IOException(L.t("Não foi possível abrir o arquivo.") + " " + name);
+                int r;
+                while ((r = in.read(buf)) != -1) os.write(buf, 0, r);
+            }
+            if (out.exists() && !out.delete()) throw new java.io.IOException(L.t("não foi possível substituir ") + out);
+            if (!tmp.renameTo(out)) throw new java.io.IOException(L.t("não foi possível gravar ") + out);
+            count[0]++;
+            final long n = count[0];
+            main.post(() -> progressDetail.setText(n + L.t(" arquivos\n") + name));
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_FOLDER_PICK && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            importFolder(data.getData());
+        }
         if (requestCode == REQUEST_ARCHIVE_PICK && resultCode == RESULT_OK && data != null && data.getData() != null) {
             startExtraction(data.getData(), null);
         }
@@ -554,6 +625,8 @@ public final class LauncherActivity extends Activity {
         installRarButton = button("", RED, TEXT, v -> startExtraction(null, GameStorage.downloadedRar().getAbsolutePath()));
         inst.addView(installRarButton, buttonLp());
         inst.addView(button(L.t("Escolher arquivo…"), SURFACE_2, TEXT, v -> openArchivePicker()), buttonLp());
+        inst.addView(text(L.t("Já extraiu o jogo? Escolha a pasta que tem o re5dx9.exe e a nativePC_MT."), 13, TEXT_DIM, false));
+        inst.addView(button(L.t("Escolher pasta extraída…"), SURFACE_2, TEXT, v -> openFolderPicker()), buttonLp());
 
         // Multiplayer: toda a configuração da LAN fica aqui (o jogo não tem tela para isso)
         LinearLayout mp = card(body);

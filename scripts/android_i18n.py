@@ -500,6 +500,13 @@ T = {
 "🎮 Usando o controle · toque na tela para voltar": ("🎮 Using the controller · touch the screen to go back",
     "🎮 Usando el mando · toca la pantalla para volver", "🎮 正在使用手柄 · 触摸屏幕切回",
     "🎮 Используется геймпад · коснитесь экрана, чтобы вернуться", "🎮 コントローラーを使用中・画面に触れると戻ります"),
+"Já extraiu o jogo? Escolha a pasta que tem o re5dx9.exe e a nativePC_MT.": ("Already extracted the game? Pick the folder that has re5dx9.exe and nativePC_MT.", "¿Ya extrajiste el juego? Elige la carpeta que tiene re5dx9.exe y nativePC_MT.", "已经解压好游戏了？请选择包含 re5dx9.exe 和 nativePC_MT 的文件夹。", "Уже распаковали игру? Выберите папку с re5dx9.exe и nativePC_MT.", "すでに展開済みですか？ re5dx9.exe と nativePC_MT があるフォルダーを選んでください。"),
+"Escolher pasta extraída…": ("Choose extracted folder…", "Elegir carpeta extraída…", "选择已解压的文件夹…", "Выбрать распакованную папку…", "展開済みフォルダーを選ぶ…"),
+"Copiando a pasta do jogo…": ("Copying the game folder…", "Copiando la carpeta del juego…", "正在复制游戏文件夹…", "Копирование папки игры…", "ゲームフォルダーをコピー中…"),
+"Não foi possível abrir a pasta escolhida.": ("Could not open the chosen folder.", "No se pudo abrir la carpeta elegida.", "无法打开所选文件夹。", "Не удалось открыть выбранную папку.", "選択したフォルダーを開けませんでした。"),
+"Não encontrei ": ("I could not find ", "No encontré ", "未找到 ", "Не найдено: ", "見つかりません: "),
+"Pasta incompleta": ("Incomplete folder", "Carpeta incompleta", "文件夹不完整", "Папка неполная", "フォルダーが不完全です"),
+" nessa pasta. Escolha a pasta que contém os dois.": (" in that folder. Pick the folder that contains both.", " en esa carpeta. Elige la carpeta que contiene ambos.", "。请选择同时包含两者的文件夹。", " в этой папке. Выберите папку, где есть оба.", "。両方が入っているフォルダーを選んでください。"),
 }
 
 LANGS = ["en", "es", "zh", "ru", "ja"]

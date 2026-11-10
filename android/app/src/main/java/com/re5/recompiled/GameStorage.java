@@ -64,6 +64,50 @@ public final class GameStorage {
         return hasData(dir) && hasExe(dir);
     }
 
+    /**
+     * Acha, até 4 níveis abaixo de {@code dir}, a pasta que contém nativePC_MT (sem
+     * diferenciar maiúsculas): arquivos compactados costumam trazer o jogo dentro de uma
+     * pasta com outro nome ("Resident Evil 5/", "RE5/"...).
+     */
+    public static File findDataParent(File dir, int depth) {
+        File[] kids = dir.listFiles();
+        if (kids == null) return null;
+        for (File k : kids) {
+            if (k.isDirectory() && k.getName().equalsIgnoreCase(DATA_DIR_NAME)) return dir;
+        }
+        if (depth >= 4) return null;
+        for (File k : kids) {
+            if (!k.isDirectory()) continue;
+            File r = findDataParent(k, depth + 1);
+            if (r != null) return r;
+        }
+        return null;
+    }
+
+    /**
+     * Deixa nativePC_MT/ e re5dx9.exe direto em {@code target}, venham de onde vierem
+     * (pasta intermediária, nomes com outra caixa). Não faz nada se já estiver certo.
+     */
+    public static void normalizeLayout(File target) {
+        File parent = findDataParent(target, 0);
+        if (parent == null) return;
+        try {
+            if (!parent.equals(target)) moveTree(parent, target, null);
+        } catch (IOException e) {
+            android.util.Log.e("GameStorage", "normalizeLayout", e);
+        }
+        File[] kids = target.listFiles();
+        if (kids == null) return;
+        for (File k : kids) {
+            String n = k.getName();
+            if (k.isDirectory() && n.equalsIgnoreCase(DATA_DIR_NAME) && !n.equals(DATA_DIR_NAME)) {
+                k.renameTo(new File(target, DATA_DIR_NAME));
+            } else if (k.isFile() && n.equalsIgnoreCase(EXE_NAME) && !n.equals(EXE_NAME)) {
+                k.renameTo(new File(target, EXE_NAME));
+            }
+        }
+    }
+
     public static long sizeOf(File f) {
         if (f.isFile()) return f.length();
         long total = 0;
