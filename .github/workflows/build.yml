@@ -1,0 +1,175 @@
+# CI: testes do runtime no Linux + APK de depuração para Android ARM64.
+#
+# LIMITE IMPORTANTE (decisão D7, docs/ARQUITETURA.md): o código C gerado
+# (generated/src/) e o re5dx9.clean.exe derivam do executável do jogo e NUNCA
+# vão para o git. Sem eles, o CI compila tudo o que o repositório tem (runtime,
+# launcher, DXVK já versionada em LFS) usando o stub de generated/stub:
+#   - o APK instala e abre o launcher, mas o jogo NÃO roda (o host carrega a
+#     imagem e para com a mensagem de "Fase 2 pendente");
+#   - serve para provar que o projeto compila, linka e empacota a cada push.
+# O APK jogável continua sendo gerado na sua máquina (lift + build local).
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Mesma versão do android/app/build.gradle (ndkVersion).
+  ANDROID_NDK_VERSION: "30.0.16248370"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CLAUDE.md: "ctest tem que ficar verde antes de todo push".
+  # ---------------------------------------------------------------------------
+  linux-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false   # nenhum teste precisa dos blobs LFS (os que precisam do jogo são pulados)
+
+      - name: Dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build nasm build-essential pkg-config
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Dependências Python do pipeline
+        run: python -m pip install -r scripts/requirements.txt
+
+      # O repositório foi criado no Windows: configure/gradlew/*.sh estão com modo 644.
+      - name: Marcar scripts como executáveis
+        run: |
+          chmod +x scripts/*.sh android/gradlew third_party/FFmpeg/configure
+          find third_party/FFmpeg -type f -name '*.sh' -exec chmod +x {} +
+
+      - name: Cache do FFmpeg mínimo (Linux)
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg
+          key: ffmpeg-linux-${{ hashFiles('scripts/build_ffmpeg.sh', 'third_party/FFmpeg/RELEASE') }}
+
+      - name: FFmpeg mínimo (vídeos do jogo)
+        run: bash scripts/build_ffmpeg.sh
+
+      - name: Configurar
+        run: cmake --preset linux-debug
+
+      - name: Compilar
+        run: cmake --build --preset linux-debug -j"$(nproc)"
+
+      - name: ctest
+        run: ctest --preset linux-debug
+
+  # ---------------------------------------------------------------------------
+  # APK de depuração (arm64-v8a) sem o código gerado do jogo: ver o cabeçalho.
+  # ---------------------------------------------------------------------------
+  android-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false   # só precisamos de 2 blobs LFS (abaixo), não dos vídeos/wavs de teste
+
+      # libdxvk_d3d9.so e libunrar.so são versionadas em LFS e vão dentro do APK.
+      - name: Baixar as bibliotecas do jniLibs (Git LFS)
+        run: |
+          git lfs install --local
+          git lfs pull --include="android/app/src/main/jniLibs/arm64-v8a/*"
+          for f in android/app/src/main/jniLibs/arm64-v8a/*.so; do
+            size=$(stat -c %s "$f")
+            echo "$f: $size bytes"
+            if [ "$size" -lt 4096 ]; then
+              echo "::error::$f continua sendo um ponteiro LFS (${size} bytes); o git lfs pull falhou" >&2
+              exit 1
+            fi
+          done
+
+      - name: Dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build cmake make
+
+      - name: Marcar scripts como executáveis
+        run: |
+          chmod +x scripts/*.sh android/gradlew third_party/FFmpeg/configure
+          find third_party/FFmpeg -type f -name '*.sh' -exec chmod +x {} +
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: SDK/NDK do Android
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "ndk;${ANDROID_NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache do FFmpeg mínimo (Android)
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg-android
+          key: ffmpeg-android-ndk${{ env.ANDROID_NDK_VERSION }}-${{ hashFiles('scripts/build_ffmpeg_android.sh', 'third_party/FFmpeg/RELEASE') }}
+
+      - name: FFmpeg mínimo para Android
+        run: bash scripts/build_ffmpeg_android.sh
+
+      # Sem generated/src, o CMake usa generated/stub (tabela de dispatch vazia).
+      - name: libre5.so (runtime + SDL2, ARM64)
+        run: |
+          cmake --preset android-arm64
+          cmake --build --preset android-arm64 --target re5 -j"$(nproc)"
+          jni=android/app/src/main/jniLibs/arm64-v8a
+          so=$(find build/android-arm64 -name libre5.so -print -quit)
+          test -n "$so" || { echo "::error::libre5.so não foi gerada"; exit 1; }
+          "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded -o "$jni/libre5.so" "$so"
+          ls -l "$jni"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # android/gradle.properties fixa o JDK do Unity no Windows do autor
+      # (org.gradle.java.home=C:/...): inválido aqui. Só na cópia do CI.
+      - name: APK de depuração
+        working-directory: android
+        run: |
+          sed -i '/^org.gradle.java.home=/d' gradle.properties
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Conferir o APK
+        run: |
+          apk=$(ls android/app/build/outputs/apk/debug/*.apk)
+          echo "$apk"
+          unzip -l "$apk" | grep -E "lib/arm64-v8a/|assets/i18n"
+          {
+            echo "### APK de depuração (sem o código gerado do jogo)"
+            echo "O launcher abre, mas o jogo **não roda**: \`generated/src\` e o \`re5dx9.clean.exe\` derivam do executável do jogo e não vão ao git (D7)."
+            echo "O APK jogável é gerado localmente."
+            echo
+            echo "\`$(basename "$apk")\` — $(du -h "$apk" | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: re5-android-debug-sem-jogo
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
