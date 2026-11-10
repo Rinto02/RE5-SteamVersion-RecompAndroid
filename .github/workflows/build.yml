@@ -144,11 +144,12 @@ jobs:
           "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded -o "$jni/libre5.so" "$so"
           ls -l "$jni"
 
-      # Validação do wrapper continua ligada. Só o jar do SDL2 (third_party, upstream, não usado
-      # no build) é liberado, pelo checksum exato apontado pela própria validação.
+      # Validação do wrapper continua ligada. O jar do wrapper do SDL2 (third_party, upstream) não é
+      # usado no build e reprova na validação: some só da cópia do CI, antes dela.
+      - name: Remover o wrapper jar não usado do SDL2
+        run: rm -f third_party/SDL2/android-project/gradle/wrapper/gradle-wrapper.jar
+
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          allow-checksums: 2c23278a62dc9f96ab11bee897d9f53e6479d6419135e4560ce822a6431df5e5
 
       # android/gradle.properties fixa o JDK do Unity no Windows do autor
       # (org.gradle.java.home=C:/...): inválido aqui. Só na cópia do CI.
