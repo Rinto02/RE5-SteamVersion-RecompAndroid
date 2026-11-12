@@ -38,3 +38,6 @@
 *.md text eol=lf
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Exceção do dono: este exe vai como arquivo comum (sem LFS): o upload LFS não é possível a partir das sessões do Claude.
+bin_input/re5dx9.clean.exe -filter -diff -merge binary

@@ -47,6 +47,8 @@ bin_input/game/
 # Arquivos do jogo: nunca no git (D7). Só o .gitkeep da pasta.
 bin_input/*
 !bin_input/.gitkeep
+# Exceção do dono: só o exe limpo vai, e só com o repositório privado (ver CLAUDE.md).
+!bin_input/re5dx9.clean.exe
 
 # Ghidra (projetos contêm o binário inteiro)
 testes com ghidra/
