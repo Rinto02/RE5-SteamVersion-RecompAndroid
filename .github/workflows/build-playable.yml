@@ -1,0 +1,173 @@
+# APK JOGÁVEL: faz o lift do re5dx9.clean.exe (x86 -> C) e compila tudo para Android ARM64.
+#
+# Precisa de bin_input/re5dx9.clean.exe no repositório (Git LFS: *.exe já está no .gitattributes).
+# A pasta nativePC_MT NÃO é necessária para compilar: ela é copiada para o aparelho pelo
+# launcher (Instalar o jogo). Não suba os vários GB dela: a cota de LFS do GitHub é pequena.
+#
+# TRAVA DE SEGURANÇA: o executável e o código gerado a partir dele são do jogo (D7). Este fluxo
+# só roda em repositório PRIVADO; em repositório público o job é pulado. O APK sai como artefato
+# do Actions (visível só a quem tem acesso ao repositório). Não o publique.
+#
+# Como usar: Actions > "build-playable" > Run workflow.
+name: build-playable
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-playable
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_NDK_VERSION: "30.0.16248370"   # mesma de android/app/build.gradle (ndkVersion)
+
+jobs:
+  playable-apk:
+    # Repositório público: não roda (vazaria o jogo).
+    if: ${{ github.event.repository.private == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Baixar do Git LFS só o necessário (exe limpo + bibliotecas do APK)
+        run: |
+          git lfs install --local
+          git lfs pull --include="bin_input/re5dx9.clean.exe,android/app/src/main/jniLibs/arm64-v8a/*"
+          exe=bin_input/re5dx9.clean.exe
+          if [ ! -f "$exe" ]; then
+            echo "::error::$exe não está no repositório. Suba-o (Git LFS) em bin_input/ e rode de novo."; exit 1
+          fi
+          size=$(stat -c %s "$exe")
+          echo "$exe: $size bytes"
+          if [ "$size" -lt 1000000 ]; then
+            echo "::error::$exe parece um ponteiro LFS ($size bytes): o git lfs pull falhou (cota de LFS?)"; exit 1
+          fi
+          for f in android/app/src/main/jniLibs/arm64-v8a/*.so; do
+            [ "$(stat -c %s "$f")" -ge 4096 ] || { echo "::error::$f é ponteiro LFS"; exit 1; }
+          done
+
+      - name: Dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build cmake make ccache
+
+      - name: Marcar scripts como executáveis
+        run: |
+          chmod +x scripts/*.sh android/gradlew third_party/FFmpeg/configure
+          find third_party/FFmpeg -type f -name '*.sh' -exec chmod +x {} +
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      - name: Dependências Python do pipeline
+        run: python -m pip install -r scripts/requirements.txt
+
+      # --- Fase 1/2: o executável é liftable? depois x86 -> C ---------------------------------
+      - name: Recon (o exe é limpo? sem SteamStub/Enigma)
+        run: python scripts/recon.py --all
+
+      - name: Lift catálogo (descoberta de funções)
+        run: python -u scripts/run_lift.py catalog
+
+      # Endereços que o runtime despachou e o catálogo não achou (opcional, versionado em config/).
+      - name: Sementes de runtime (se houver)
+        run: |
+          if [ -f config/runtime_seeds.txt ]; then
+            python -u scripts/run_lift.py catalog --add-seeds config/runtime_seeds.txt
+          else
+            echo "sem config/runtime_seeds.txt; seguindo"
+          fi
+
+      # Sai com 1 se alguma função não traduziu (esperado: ex. 0x0094818B, MMX): o dispatch
+      # aborta com o endereço se ela for chamada (D8). O que importa é gerar a tabela.
+      - name: Lift (x86 -> C)
+        run: |
+          python -u scripts/run_lift.py lift || echo "::warning::há falhas de lift: ver generated/src/lift_stats.json"
+          test -f generated/src/re5_dispatch_table.c || { echo "::error::lift não gerou re5_dispatch_table.c"; exit 1; }
+          ls generated/src | wc -l
+          cat generated/src/lift_stats.json | head -c 2000 || true
+
+      # --- Android ----------------------------------------------------------------------------
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: SDK/NDK do Android
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "ndk;${ANDROID_NDK_VERSION}" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Cache do FFmpeg mínimo (Android)
+        uses: actions/cache@v4
+        with:
+          path: build/ffmpeg-android
+          key: ffmpeg-android-ndk${{ env.ANDROID_NDK_VERSION }}-${{ hashFiles('scripts/build_ffmpeg_android.sh', 'third_party/FFmpeg/RELEASE') }}
+
+      - name: FFmpeg mínimo para Android
+        run: bash scripts/build_ffmpeg_android.sh
+
+      # O código gerado tem centenas de unidades grandes: o ccache faz as rodadas seguintes
+      # recompilarem só o que mudou (a chave usa o hash do exe).
+      - name: Cache do ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-playable-${{ hashFiles('bin_input/re5dx9.clean.exe', 'tools/pcrecomp/**', 'config/**') }}
+          restore-keys: ccache-playable-
+
+      # RAM do runner (16 GB): o .bat do autor avisa que -j16 estoura o compilador; usa 4 e, se
+      # falhar, repete com 2 (o que já compilou fica no ccache).
+      - name: libre5.so (runtime + código gerado + SDL2, ARM64)
+        run: |
+          export CCACHE_DIR="$HOME/.ccache" CCACHE_MAXSIZE=2G
+          cmake --preset android-arm64 -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build --preset android-arm64 --target re5 -j4 || cmake --build --preset android-arm64 --target re5 -j2
+          ccache -s | head -8
+          jni=android/app/src/main/jniLibs/arm64-v8a
+          so=$(find build/android-arm64 -name libre5.so -print -quit)
+          test -n "$so" || { echo "::error::libre5.so não foi gerada"; exit 1; }
+          "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded -o "$jni/libre5.so" "$so"
+          ls -l "$jni"
+
+      # O jar do wrapper do SDL2 (third_party) não é usado e reprova na validação: sai da cópia do CI.
+      - name: Remover o wrapper jar não usado do SDL2
+        run: rm -f third_party/SDL2/android-project/gradle/wrapper/gradle-wrapper.jar
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # android/gradle.properties fixa o JDK do Unity no Windows do autor: só na cópia do CI.
+      - name: APK
+        working-directory: android
+        run: |
+          sed -i '/^org.gradle.java.home=/d' gradle.properties
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Conferir o APK
+        run: |
+          apk=$(ls android/app/build/outputs/apk/debug/*.apk)
+          unzip -l "$apk" | grep -E "lib/arm64-v8a/"
+          {
+            echo "### APK jogável (com o código gerado do jogo)"
+            echo "Instale e, no launcher, escolha o game.rar/zip ou a pasta extraída (re5dx9.exe + nativePC_MT)."
+            echo
+            echo "\`$(basename "$apk")\` — $(du -h "$apk" | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: re5-android-jogavel
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7

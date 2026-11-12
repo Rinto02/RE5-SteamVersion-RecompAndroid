@@ -27,8 +27,10 @@ os põe em `bin_input/` (`re5dx9.clean.exe` e a pasta `bin_input/game` com `nati
 ## Regras
 
 - **Nunca commitar** `generated/src/`, `work/`, `build/` (derivados do binário; ver D7).
-  **Nunca commitar arquivos do jogo** (executáveis, despejos, dados, saves): `bin_input/`
-  é ignorado pelo git, inclusive por LFS.
+  **Nunca commitar arquivos do jogo** (executáveis, despejos, dados, saves), com uma exceção
+  do dono: `bin_input/re5dx9.clean.exe` pode ir por Git LFS **somente enquanto o repositório for
+  privado** (o fluxo `build-playable` do Actions faz o lift a partir dele e recusa rodar em
+  repositório público). Nunca suba `nativePC_MT/`, saves ou despejos; `generated/src/` continua fora.
 - **Falhar alto** (D8): nada de stub que "retorna 0" para fazer avançar. Import sem
   HLE aborta com o nome; instrução sem tradução aborta com o endereço.
 - Mudou o runtime ou os scripts? Teste novo ou estendido em `tests/`, e `ctest` verde.
